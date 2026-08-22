@@ -29,7 +29,7 @@ export const getStoredResult = internalQuery({ args: { strategyId: v.id("strateg
 } });
 
 export const create = mutation({
-  args: { usageType: v.union(v.literal("one_off"), v.literal("monthly")), title: v.string(), originalInput: v.string(), expectedResult: v.string(), deadline: v.optional(v.string()), budget: v.optional(v.number()), budgetAmount: v.optional(v.number()), budgetCurrency: v.optional(v.string()), monthlyTasks: v.optional(v.array(v.any())), existingTools: v.optional(v.array(v.string())), priorities: v.array(v.string()) },
+  args: { usageType: v.union(v.literal("one_off"), v.literal("monthly")), title: v.string(), originalInput: v.string(), expectedResult: v.string(), deadline: v.optional(v.string()), budget: v.optional(v.number()), budgetAmount: v.optional(v.number()), budgetCurrency: v.optional(v.string()), monthlyTasks: v.optional(v.array(v.any())), existingTools: v.optional(v.array(v.string())), priorities: v.array(v.string()), informationSensitivity: v.optional(v.string()), commercialUse: v.optional(v.boolean()), providersToAvoid: v.optional(v.array(v.string())), preferredLanguage: v.optional(v.string()), expectedOutputs: v.optional(v.string()) },
   handler: async (ctx, args) => { const user = await requireUser(ctx); const now = Date.now(); return ctx.db.insert("strategies", { ...args, userId: user._id, status: "draft", createdAt: now, updatedAt: now }); },
 });
 
@@ -42,6 +42,8 @@ export const duplicate = mutation({ args: { strategyId: v.id("strategies") }, ha
     originalInput: strategy.originalInput, expectedResult: strategy.expectedResult,
     deadline: strategy.deadline, budget: strategy.budget, budgetAmount: strategy.budgetAmount, budgetCurrency: strategy.budgetCurrency,
     monthlyTasks: strategy.monthlyTasks, existingTools: strategy.existingTools, priorities: strategy.priorities, estimatedCompletionTime: strategy.estimatedCompletionTime,
+    informationSensitivity: strategy.informationSensitivity, commercialUse: strategy.commercialUse, providersToAvoid: strategy.providersToAvoid,
+    preferredLanguage: strategy.preferredLanguage, expectedOutputs: strategy.expectedOutputs,
     status: "planned", createdAt: now, updatedAt: now,
   });
   const steps = await ctx.db.query("workflowSteps").withIndex("by_strategy", (q) => q.eq("strategyId", strategyId)).collect();

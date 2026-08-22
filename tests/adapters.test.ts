@@ -90,6 +90,19 @@ describe("source normalizers", () => {
     expect(openRouter[0].accessOptions[0]).toMatchObject({ aiFirstClass: "AI_CENTRIC", aiContributionLevel: "HIGH", automationLevel: "HIGH" });
   });
 
+  it("merges newly scanned benchmark aliases into their verified catalog models", () => {
+    const rows = [
+      { name: "gpt-oss-120b (high)", slug: "gpt-oss-120b" },
+      { name: "Nemotron 3 Super", slug: "nvidia-nemotron-3-super-120b-a12b" },
+      { name: "Claude 4.5 Haiku", slug: "claude-4.5-haiku-reasoning" },
+    ].map((item) => ({ ...item, evaluations: { artificial_analysis_intelligence_index: 80 }, pricing: { price_1m_input_tokens: 1, price_1m_output_tokens: 2 } }));
+    expect(normalizeArtificialAnalysis({ data: rows }, 100).map((item) => item.canonicalId)).toEqual([
+      "openai/gpt-oss-120b",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "anthropic/claude-haiku-4.5",
+    ]);
+  });
+
   it("normalizes public image and video benchmarks with their published prices", () => {
     const models = normalizeArtificialAnalysis({ imageModels: [{ name: "GPT Image", sourcePath: "/image/model-families/openai-gpt", qualityElo: 1200, normalizedQuality: 100, price: 40 }], videoModels: [{ name: "Veo", sourcePath: "/video/model-families/google-veo", qualityElo: 1300, normalizedQuality: 100, price: 6 }] }, 100);
     expect(models[0]).toMatchObject({ modalities: ["text", "image"], capabilities: ["image_generation"] });

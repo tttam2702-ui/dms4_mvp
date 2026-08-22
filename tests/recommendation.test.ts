@@ -126,17 +126,40 @@ describe("deterministic recommendation engine", () => {
       evidence: [capabilityEvidence],
       accessOptions: [{ ...aiFirst, label: "Open Codex", url: "https://chatgpt.com/codex", modelId: "openai/codex-product", sourceUrl: "https://developers.openai.com/", verifiedAt: now, productId: "openai/codex-product", productName: "OpenAI Codex", planName: "ChatGPT plan or API usage", accessMethod: "product" }],
     };
-    const recommendation = recommendStep(codingStep, [codex], { ...context, budgetUsd: 0 });
+    const recommendation = recommendStep(codingStep, [codex], { ...context, budgetUsd: 0, existingTools: ["OpenAI Codex"] });
     expect(recommendation.selected?.model.name).toBe("OpenAI Codex");
     expect(recommendation.selected?.evidenceConfidence).toBe("Limited");
     expect(recommendation.selected?.qualityScore).toBe(0);
   });
-  it("keeps the closest complete subscription option when the entered budget is too low", () => {
+  it("does not recommend a subscription above the entered budget", () => {
     const subscribed = { ...model, accessOptions: [{ ...model.accessOptions![0], productId: "provider-suite", productName: "Provider Suite", planName: "Pro", accessMethod: "product" as const, monthlyPriceUsd: 20 }] };
     const plan = generateStrategyPlan([step], [subscribed], { ...context, budgetUsd: 5 }, "recommended");
-    expect(plan.steps[0].selected).not.toBeNull();
-    expect(plan.totalCostUsd).toBe(20);
-    expect(plan.overBudgetUsd).toBe(15);
+    expect(plan.steps[0].selected).toBeNull();
+    expect(plan.totalCostUsd).toBe(0);
+    expect(plan.budgetCompatible).toBe(false);
+  });
+  it("rejects an unpriced new subscription when a budget was provided", () => {
+    const unpriced = { ...model, accessOptions: [{ ...model.accessOptions![0], productName: "Mystery Suite", planName: "Pro", accessMethod: "product" as const }] };
+    expect(getExclusionReasons(step, unpriced, context)).toContain("Subscription price is not verified, so budget compatibility cannot be confirmed");
+    expect(generateStrategyPlan([step], [unpriced], context, "recommended").steps[0].selected).toBeNull();
+  });
+  it("enforces the budget across the complete stack, not separately per step", () => {
+    const translationEvidence = { ...preferenceEvidence, category: "translation", metricName: "multilingual_quality" };
+    const translationStep = { ...step, id: "s2", order: 1, name: "Translate", plainLanguageDescription: "Translate the approved copy", requiredCapabilities: ["translation"], minimumQuality: "good" as const };
+    const writer = { ...model, id: "writer", accessOptions: [{ ...model.accessOptions![0], productId: "writer", productName: "Writer", accessMethod: "product" as const, monthlyPriceUsd: 6 }] };
+    const translator = { ...model, id: "translator", capabilities: ["translation"], evidence: [translationEvidence, pricingEvidence], accessOptions: [{ ...model.accessOptions![0], productId: "translator", productName: "Translator", accessMethod: "product" as const, monthlyPriceUsd: 6 }] };
+    const plan = generateStrategyPlan([step, translationStep], [writer, translator], { ...context, budgetUsd: 10 }, "recommended");
+    expect(plan.totalCostUsd).toBeLessThanOrEqual(10);
+    expect(plan.completeStepCount).toBe(1);
+    expect(plan.budgetCompatible).toBe(false);
+  });
+  it("treats avoided providers and sensitive information as hard requirements", () => {
+    expect(getExclusionReasons(step, model, { ...context, providersToAvoid: ["Provider"] })).toContain("Provider is excluded by the user's preference: Provider");
+    expect(getExclusionReasons(step, { ...model, privacyLevel: "business" }, { ...context, informationSensitivity: "restricted" })).toContain("Privacy controls do not meet the requirement");
+  });
+  it("records every saved answer in the plan's auditable input summary", () => {
+    const plan = generateStrategyPlan([step], [model], { ...context, projectDescription: "Write a launch campaign", expectedResult: "Approved copy", deadline: "2033-06-01", informationSensitivity: "business", commercialUse: true, providersToAvoid: ["Acme"], preferredLanguage: "Vietnamese", expectedOutputs: "DOCX and PDF", existingTools: ["Provider"] }, "recommended");
+    expect(plan.inputsUsed).toMatchObject({ projectDescription: "Write a launch campaign", expectedResult: "Approved copy", preferredLanguage: "Vietnamese", expectedOutputs: "DOCX and PDF", providersToAvoid: ["Acme"], existingTools: ["Provider"] });
   });
   it("shows distinct products across the five user-facing option slots when alternatives exist", () => {
     const candidates = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"].map((name, index) => ({

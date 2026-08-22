@@ -17,6 +17,11 @@ export async function POST(request:Request){try{
     budget:oneOff?budgetToUsd(input.budgetAmount,input.budgetCurrency)??undefined:undefined,
     budgetAmount:oneOff?input.budgetAmount??undefined:undefined,budgetCurrency:oneOff?input.budgetCurrency:undefined,
     monthlyTasks:oneOff?undefined:input.monthlyTasks,existingTools:input.existingTools,priorities,
+    informationSensitivity:input.optionalContext.informationSensitivity,
+    commercialUse:input.optionalContext.commercialUse,
+    providersToAvoid:input.optionalContext.providersToAvoid,
+    preferredLanguage:input.optionalContext.preferredLanguage,
+    expectedOutputs:input.optionalContext.expectedOutputs||undefined,
   });
   const analysis=await client.action(anyApi.actions.planner.analyse,{strategyId,input});
   const result=await generateMonthlyRecommendations(client,strategyId,input.usageType);

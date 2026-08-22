@@ -15,7 +15,7 @@ type Selected = { kind: "single" | "combination" | "partial"; model: Model; roun
 type Options = { bestFit: Selected | null; budget: Selected | null; premium: Selected | null; fastest: Selected | null; privacy: Selected | null };
 type Step = { stepId: string; step: { name: string; plainLanguageDescription: string; inputDescription: string; outputDescription: string; humanReviewRecommended: boolean; noAIEligible: boolean; noAIAlternative: string }; taskCategory: string; requiredCapabilities: string[]; selected: Selected | null; options: Options; alternatives: Selected[]; partialOptions: Selected[]; exclusions: Array<{ modelName: string; reasons: string[] }>; dataUpdatedAt: number | null };
 type Subscription = { productId: string; productName: string; planName: string; accessMethod?: string; priceUsd: number | null; accessUrl: string; stepIds: string[]; stepNames: string[]; modelNames: string[]; alreadyOwned: boolean; additionalCostUsd: number | null; apiUsageEstimateUsd: number };
-type Plan = { variant: string; steps: Step[]; fixedCostUsd: number; apiCostUsd: number; totalCostUsd: number; estimatedSavingsUsd: number; existingSubscriptions: { kept: string[]; couldCancel: string[] }; subscriptions: Subscription[]; uniqueProductCount: number; completeStepCount: number; budgetUsd?: number | null; overBudgetUsd?: number; hasUnknownSubscriptionPricing?: boolean; assumptions: string[]; dataUpdatedAt: number | null };
+type Plan = { variant: string; steps: Step[]; fixedCostUsd: number; apiCostUsd: number; totalCostUsd: number; estimatedSavingsUsd: number; existingSubscriptions: { kept: string[]; couldCancel: string[] }; subscriptions: Subscription[]; uniqueProductCount: number; completeStepCount: number; budgetUsd?: number | null; overBudgetUsd?: number; hasUnknownSubscriptionPricing?: boolean; budgetCompatible?: boolean; budgetRemainingUsd?: number | null; inputsUsed?: { projectDescription: string | null; expectedResult: string | null; budgetUsd: number | null; deadline: string | null; priorityRanking: string[]; existingTools: string[]; informationSensitivity: string; commercialUse: boolean; providersToAvoid: string[]; preferredLanguage: string; expectedOutputs: string | null; region: string }; assumptions: string[]; dataUpdatedAt: number | null };
 type SnapshotSource = { source: string; sourceUrl?: string; attribution?: string; fetchedAt: number; sourceVersion?: string };
 type Result = { locked: boolean; usageType: "one_off" | "monthly"; estimatedCompletionTime?: string; plans: Plan[]; dataSnapshot: { fetchedAt: number; sources?: SnapshotSource[] } };
 
@@ -144,6 +144,9 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
   const plan = result.plans.find((item) => item.variant === tab) ?? result.plans[0];
   const stale = loadedAt - result.dataSnapshot.fetchedAt > 7 * 86_400_000;
   const subscriptions = plan.subscriptions ?? [];
+  const inputs = plan.inputsUsed;
+  const budgetConfigured = plan.budgetUsd !== null && plan.budgetUsd !== undefined;
+  const costPeriod = result.usageType === "monthly" ? "Estimated monthly total" : "First-month project total";
 
   return (
     <div className="w-full max-w-6xl mx-auto my-auto py-6 space-y-8">
@@ -194,6 +197,28 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
 
       {stale && <span className="font-mono text-xs text-amber-400 bg-amber-400/10 px-4 py-1.5 rounded-full border border-amber-400/20 block w-max">DATA LAST UPDATED &gt; 7 DAYS AGO</span>}
 
+      <section className="glass-card p-6 md:p-8 rounded-3xl border border-white/10 space-y-6" aria-label="Requirements used for this recommendation">
+        <div className="flex items-start justify-between gap-6 flex-wrap">
+          <div>
+            <span className="font-mono text-[10px] text-indigo-soft uppercase tracking-wider">YOUR REQUIREMENTS WERE APPLIED</span>
+            <h2 className="text-xl font-semibold text-white mt-1">Budget and input check</h2>
+            <p className="text-xs text-ink-2 mt-2 max-w-2xl">The selected stack must satisfy the complete workflow and stay inside the total budget. New subscriptions without a verified price are not treated as free.</p>
+          </div>
+          {budgetConfigured && (
+            <span className={`font-mono text-xs font-bold px-4 py-2 rounded-full border ${plan.budgetCompatible !== false ? "text-emerald-400 bg-emerald-400/10 border-emerald-400/30" : "text-amber-300 bg-amber-400/10 border-amber-400/30"}`}>
+              {plan.budgetCompatible !== false ? "WITHIN BUDGET" : "NO COMPLETE STACK FITS"}
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10"><span className="block text-[10px] font-mono text-ink-3 uppercase">Budget cap</span><strong className="block text-white mt-1">{budgetConfigured ? friendlyCost(plan.budgetUsd!) : "Not set"}</strong></div>
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10"><span className="block text-[10px] font-mono text-ink-3 uppercase">Projected total</span><strong className="block text-white mt-1">{friendlyCost(plan.totalCostUsd)}</strong></div>
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10"><span className="block text-[10px] font-mono text-ink-3 uppercase">Language</span><strong className="block text-white mt-1">{inputs?.preferredLanguage ?? "English"}</strong></div>
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10"><span className="block text-[10px] font-mono text-ink-3 uppercase">Information</span><strong className="block text-white mt-1">{humanize(inputs?.informationSensitivity ?? "standard")}</strong></div>
+        </div>
+        {inputs && <details className="text-xs text-ink-2"><summary className="font-mono font-semibold text-indigo-soft cursor-pointer">View every input used</summary><div className="grid md:grid-cols-2 gap-3 mt-4 p-4 rounded-2xl bg-white/5 border border-white/10"><p><strong className="text-white">Priority order:</strong> {inputs.priorityRanking.map(humanize).join(" → ")}</p><p><strong className="text-white">Deadline:</strong> {inputs.deadline ?? "No deadline"}</p><p><strong className="text-white">Commercial use:</strong> {inputs.commercialUse ? "Required" : "Not required"}</p><p><strong className="text-white">Existing tools:</strong> {inputs.existingTools.join(", ") || "None provided"}</p><p><strong className="text-white">Providers avoided:</strong> {inputs.providersToAvoid.join(", ") || "None"}</p><p><strong className="text-white">Expected outputs:</strong> {inputs.expectedOutputs ?? "Defined by the approved workflow"}</p></div></details>}
+      </section>
+
       {/* 20px Spacer Div */}
       <div className="h-[20px] w-full block" />
 
@@ -222,7 +247,7 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
 
               {step.selected && (
                 <div className="text-right flex-none">
-                  <span className="font-mono text-[10px] text-ink-3 uppercase block tracking-wider mb-1">ESTIMATED STEP COST</span>
+                  <span className="font-mono text-[10px] text-ink-3 uppercase block tracking-wider mb-1">ESTIMATED USAGE</span>
                   <strong className="text-xl font-bold text-white font-sans">{friendlyCost(step.selected.estimatedCostUsd)}</strong>
                 </div>
               )}
@@ -250,7 +275,10 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
                 <p className="text-xs text-ink-2 leading-relaxed">{step.step.noAIAlternative}</p>
               </div>
             ) : (
-              <PartialOptions options={step.partialOptions ?? []} />
+              <div>
+                <PartialOptions options={step.partialOptions ?? []} />
+                {budgetConfigured && <p className="text-xs text-amber-300 mt-3">No verified complete option for this step fits the total ${plan.budgetUsd!.toFixed(2)} budget with the other workflow steps.</p>}
+              </div>
             )}
           </article>
         ))}
@@ -271,9 +299,9 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
           </div>
 
           <div className="text-right">
-            <span className="font-mono text-xs text-ink-3 uppercase block tracking-wider mb-1">YOU SAVE</span>
+            <span className="font-mono text-xs text-ink-3 uppercase block tracking-wider mb-1">{plan.estimatedSavingsUsd > 0 ? "VERIFIED SAVINGS" : costPeriod}</span>
             <span className="text-3xl font-bold text-indigo-soft tracking-tight">
-              ${plan.estimatedSavingsUsd > 0 ? plan.estimatedSavingsUsd.toFixed(0) : "39"} / MONTH
+              {plan.estimatedSavingsUsd > 0 ? `${friendlyCost(plan.estimatedSavingsUsd)} saved` : friendlyCost(plan.totalCostUsd)}
             </span>
           </div>
         </div>
@@ -288,9 +316,7 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
                     <span className="block text-xs text-ink-2">{sub.planName} • Used for {sub.stepNames.join(", ")}</span>
                   </div>
                   <div className="text-right flex-none space-y-1">
-                    <strong className="text-base font-bold text-white block">
-                      {sub.priceUsd === null ? "Check Price" : `$${sub.priceUsd.toFixed(2)}/mo`}
-                    </strong>
+                    <strong className="text-base font-bold text-white block">{sub.accessMethod === "product" ? (sub.priceUsd === null ? "Price not verified" : `$${sub.priceUsd.toFixed(2)}/mo`) : `${friendlyCost(sub.apiUsageEstimateUsd)} usage`}</strong>
                     <a href={sub.accessUrl} target="_blank" rel="noreferrer" className="block text-xs text-indigo-soft hover:underline font-medium">
                       View Plan &rarr;
                     </a>
@@ -299,13 +325,10 @@ export function ResultsView({ strategyId }: { strategyId: string }) {
               ))}
             </div>
 
-            <div className="flex items-center justify-between p-6 rounded-2xl bg-gradient-to-r from-indigo-500/10 to-pink-500/10 border border-indigo-500/30 gap-6">
-              <span className="font-mono text-xs font-bold text-indigo-soft uppercase tracking-wider">
-                {subscriptions.length} SUBSCRIPTIONS • CONSOLIDATED STACK
-              </span>
-              <strong className="text-2xl font-bold text-white">
-                {friendlyCost(plan.totalCostUsd)} / MONTH
-              </strong>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-5 rounded-2xl bg-gradient-to-r from-indigo-500/10 to-pink-500/10 border border-indigo-500/30">
+              <div><span className="block text-[10px] font-mono text-ink-3 uppercase">New subscriptions</span><strong className="text-lg text-white">{friendlyCost(plan.fixedCostUsd)} / month</strong></div>
+              <div><span className="block text-[10px] font-mono text-ink-3 uppercase">Estimated API usage</span><strong className="text-lg text-white">{friendlyCost(plan.apiCostUsd)}</strong></div>
+              <div><span className="block text-[10px] font-mono text-indigo-soft uppercase">{costPeriod}</span><strong className="text-lg text-white">{friendlyCost(plan.totalCostUsd)}</strong></div>
             </div>
           </div>
         ) : (

@@ -5,9 +5,9 @@ import { aiAccessMetadata, aiNativeMetadata, type AiFirstMetadata } from "../rec
 import { OFFICIAL_AI_PRODUCTS } from "./product-catalog";
 
 export const NORMALIZER_VERSIONS: Record<SourceId, number> = {
-  artificial_analysis: 8,
+  artificial_analysis: 9,
   openrouter: 9,
-  mmlu_pro: 3,
+  mmlu_pro: 4,
   open_asr: 1,
   openai_official: 3,
   official_products: 1,

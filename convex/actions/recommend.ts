@@ -5,7 +5,7 @@ import { ConvexError, v } from "convex/values";
 import { applicationErrorData } from "../../lib/application-errors";
 import { validatePriorityRanking, WorkflowStepSchema, type WorkflowStep } from "../../lib/planner/schema";
 import { generateStrategyPlan, planImprovementReasons } from "../../lib/recommendation/engine";
-import type { CanonicalModel, StrategyPlan, StrategyVariant } from "../../lib/recommendation/types";
+import type { CanonicalModel, RecommendationContext, StrategyPlan, StrategyVariant } from "../../lib/recommendation/types";
 import type { AiFirstClass, ContributionLevel } from "../../lib/recommendation/ai-first";
 import { requireIdentity } from "../lib/auth";
 
@@ -52,6 +52,28 @@ function toStep(record: { _id: string; order: number; name: string; description:
   return WorkflowStepSchema.parse({ id: record._id, order: record.order, name: record.name, plainLanguageDescription: record.description, inputDescription: requirements.inputDescription ?? "User-provided material", outputDescription: requirements.outputDescription ?? "Completed step", dependencies: requirements.dependencies ?? [], canRunInParallel: requirements.canRunInParallel ?? false, estimatedInputTokensLow: estimates.inputLow ?? 0, estimatedInputTokensExpected: estimates.inputExpected ?? 0, estimatedInputTokensHigh: estimates.inputHigh ?? 0, estimatedOutputTokensLow: estimates.outputLow ?? 0, estimatedOutputTokensExpected: estimates.outputExpected ?? 0, estimatedOutputTokensHigh: estimates.outputHigh ?? 0, estimatedRequestCount: estimates.requests ?? 0, estimatedImageCount: estimates.images ?? 0, estimatedAudioMinutes: estimates.audioMinutes ?? 0, estimatedVideoMinutes: estimates.videoMinutes ?? 0, requiredModalities: requirements.requiredModalities ?? [], requiredCapabilities: requirements.requiredCapabilities ?? [], requiresCurrentInformation: requirements.requiresCurrentInformation ?? false, privacyRequirement: requirements.privacyRequirement ?? "standard", commercialUseRequired: requirements.commercialUseRequired ?? false, minimumQuality: requirements.minimumQuality ?? "good", importance: requirements.importance ?? "medium", noAIEligible: requirements.noAIEligible ?? false, noAIAlternative: requirements.noAIAlternative ?? "Complete manually", humanReviewRecommended: requirements.humanReviewRecommended ?? true, assumptions: requirements.assumptions ?? [] });
 }
 
+function recommendationContext(strategy: {
+  priorities: string[]; budget?: number; usageType: "one_off" | "monthly"; deadline?: string; originalInput: string; expectedResult: string;
+  existingTools?: string[]; informationSensitivity?: string; commercialUse?: boolean; providersToAvoid?: string[]; preferredLanguage?: string; expectedOutputs?: string;
+}, region: string): RecommendationContext {
+  return {
+    priorities: validatePriorityRanking(strategy.priorities),
+    budgetUsd: strategy.budget ?? null,
+    region,
+    now: Date.now(),
+    existingTools: strategy.existingTools ?? [],
+    usageType: strategy.usageType,
+    deadline: strategy.deadline,
+    projectDescription: strategy.originalInput,
+    expectedResult: strategy.expectedResult,
+    informationSensitivity: strategy.informationSensitivity ?? "standard",
+    commercialUse: strategy.commercialUse ?? true,
+    providersToAvoid: strategy.providersToAvoid ?? [],
+    preferredLanguage: strategy.preferredLanguage ?? "English",
+    expectedOutputs: strategy.expectedOutputs,
+  };
+}
+
 export const generate = action({ args: { strategyId: v.id("strategies"), region: v.string() }, handler: async (ctx, args) => {
   await requireIdentity(ctx); const { strategyId, region } = args;
   const owned = await ctx.runQuery(anyApi.strategies.getOwned, { strategyId });
@@ -62,9 +84,8 @@ export const generate = action({ args: { strategyId: v.id("strategies"), region:
   const snapshotSummary = [...snapshots].sort((a, b) => a.fetchedAt - b.fetchedAt).map((item) => ({ id: item._id, fetchedAt: item.fetchedAt, source: item.source, sourceUrl: item.sourceUrl, attribution: item.attribution, sourceVersion: item.sourceVersion }));
   const oldestEvidenceAt = Math.min(...snapshotSummary.map((item) => item.fetchedAt));
   const storedModels = await ctx.runQuery(anyApi.models.catalog, {}) as StoredModel[];
-  const priorities = validatePriorityRanking(owned.strategy.priorities);
   const existingTools = owned.strategy.existingTools ?? [];
-  const context = { priorities, budgetUsd: owned.strategy.budget ?? null, region, now: Date.now(), existingTools, usageType: owned.strategy.usageType, deadline: owned.strategy.deadline };
+  const context = recommendationContext(owned.strategy, region);
   const variants: StrategyVariant[] = ["recommended", "lowest_cost", "highest_quality", "fastest", "privacy"];
   const models = storedModels.map(toModel).map((model) => ({ ...model, existingTool: existingTools.some((tool: string) => `${model.provider} ${model.name}`.toLowerCase().includes(tool.toLowerCase())) }));
   const plans = variants.map((variant) => generateStrategyPlan(owned.steps.map(toStep), models, context, variant));
@@ -94,6 +115,12 @@ function storedPlan(record: { planType: string; recommendations: unknown; costEs
     budgetUsd: null,
     overBudgetUsd: 0,
     hasUnknownSubscriptionPricing: false,
+    budgetCompatible: true,
+    budgetRemainingUsd: null,
+    inputsUsed: {
+      projectDescription: null, expectedResult: null, budgetUsd: null, deadline: null, priorityRanking: [], existingTools: [],
+      informationSensitivity: "standard", commercialUse: true, providersToAvoid: [], preferredLanguage: "English", expectedOutputs: null, region: "global",
+    },
     assumptions: record.assumptions,
     dataUpdatedAt: null,
   };
@@ -131,8 +158,7 @@ export const reEvaluatePending = internalAction({ args: {}, handler: async (ctx)
       const currentRecord = item.plans.find((plan: { planType: string }) => plan.planType === "recommended");
       const current = currentRecord ? storedPlan(currentRecord) : null;
       if (!current) throw new Error("CURRENT_PLAN_NOT_FOUND");
-      const priorities = validatePriorityRanking(item.strategy.priorities);
-      const context = { priorities, budgetUsd: item.strategy.budget ?? null, region: "global", now: Date.now(), existingTools: item.strategy.existingTools ?? [], usageType: item.strategy.usageType, deadline: item.strategy.deadline };
+      const context = recommendationContext(item.strategy, "global");
       const variants: StrategyVariant[] = ["recommended", "lowest_cost", "highest_quality", "fastest", "privacy"];
       const plans = variants.map((variant) => generateStrategyPlan(item.steps.map(toStep), models, context, variant));
       const reasons = planImprovementReasons(current, plans[0]);

@@ -75,7 +75,22 @@ export type StepRecommendation = {
   exclusions: Exclusion[];
   dataUpdatedAt: number | null;
 };
-export type RecommendationContext = { priorities: Priority[]; budgetUsd: number | null; region: string; now: number; existingTools?: string[]; usageType?: "one_off" | "monthly"; deadline?: string };
+export type RecommendationContext = {
+  priorities: Priority[];
+  budgetUsd: number | null;
+  region: string;
+  now: number;
+  existingTools?: string[];
+  usageType?: "one_off" | "monthly";
+  deadline?: string;
+  projectDescription?: string;
+  expectedResult?: string;
+  informationSensitivity?: string;
+  commercialUse?: boolean;
+  providersToAvoid?: string[];
+  preferredLanguage?: string;
+  expectedOutputs?: string;
+};
 export type StrategyVariant = "recommended" | "lowest_cost" | "highest_quality" | "fastest" | "privacy";
 export type SubscriptionSummary = {
   productId: string;
@@ -100,6 +115,22 @@ export type StrategyPlan = {
   budgetUsd: number | null;
   overBudgetUsd: number;
   hasUnknownSubscriptionPricing: boolean;
+  budgetCompatible: boolean;
+  budgetRemainingUsd: number | null;
+  inputsUsed: {
+    projectDescription: string | null;
+    expectedResult: string | null;
+    budgetUsd: number | null;
+    deadline: string | null;
+    priorityRanking: Priority[];
+    existingTools: string[];
+    informationSensitivity: string;
+    commercialUse: boolean;
+    providersToAvoid: string[];
+    preferredLanguage: string;
+    expectedOutputs: string | null;
+    region: string;
+  };
   assumptions: string[]; dataUpdatedAt: number | null;
 };
 export type RecommendationRequest = { steps: WorkflowStep[]; models: CanonicalModel[]; context: RecommendationContext };

@@ -35,6 +35,24 @@ function productAccess(model: CanonicalModel) {
   return model.accessOptions?.find((option) => option.accessMethod === "product");
 }
 
+function effectivePrivacyRequirement(step: WorkflowStep, context: RecommendationContext): keyof typeof PRIVACY_RANK {
+  const requested = context.informationSensitivity && context.informationSensitivity in PRIVACY_RANK
+    ? context.informationSensitivity as keyof typeof PRIVACY_RANK
+    : "standard";
+  return PRIVACY_RANK[requested] > PRIVACY_RANK[step.privacyRequirement] ? requested : step.privacyRequirement;
+}
+
+function modelIsAlreadyOwned(model: CanonicalModel, context: RecommendationContext) {
+  const access = productAccess(model);
+  const haystack = `${model.provider} ${model.name} ${access?.productName ?? ""} ${access?.planName ?? ""}`.toLowerCase();
+  return model.existingTool || (context.existingTools ?? []).some((tool) => haystack.includes(tool.toLowerCase()));
+}
+
+function avoidedProviderMatch(model: CanonicalModel, context: RecommendationContext) {
+  const haystack = `${model.provider} ${model.name} ${(model.accessOptions ?? []).map((option) => `${option.productName ?? ""} ${option.label}`).join(" ")}`.toLowerCase();
+  return (context.providersToAvoid ?? []).find((provider) => provider.trim() && haystack.includes(provider.trim().toLowerCase()));
+}
+
 export function priorityWeights(priorities: Priority[]) {
   const weights: Record<keyof typeof BASE_WEIGHTS, number> = { ...BASE_WEIGHTS };
   const boosts: Record<Priority, keyof typeof weights> = { lowest_cost: "cost", balanced: "evidence", highest_quality: "performance", fastest: "speed", privacy: "privacy", existing_tools: "existing" };
@@ -105,6 +123,8 @@ function modalityGaps(step: WorkflowStep, models: CanonicalModel[]) {
 
 function nonCoverageExclusionReasons(step: WorkflowStep, model: CanonicalModel, context: RecommendationContext, evidenceCapabilities?: Capability[]) {
   const reasons: string[] = [];
+  const avoidedProvider = avoidedProviderMatch(model, context);
+  if (avoidedProvider) reasons.push(`Provider is excluded by the user's preference: ${avoidedProvider}`);
   if (!model.active) reasons.push("Model is inactive");
   if (!(model.accessOptions ?? []).length) reasons.push("No verified access path is available");
   else if (!isAiFirstEligible(model) || !(model.accessOptions ?? []).some(isAiFirstEligible)) {
@@ -118,9 +138,10 @@ function nonCoverageExclusionReasons(step: WorkflowStep, model: CanonicalModel, 
   const mediaTool = capabilities.some((capability) => ["image_generation", "video_generation", "audio_generation", "text_to_speech", "speech_to_text", "video_editing"].includes(capability));
   if (!verifiedProduct && !mediaTool && model.contextWindow === null) reasons.push("Critical context-window evidence is unavailable");
   else if (model.contextWindow !== null && model.contextWindow < expectedContext && !capabilities.includes("document_parsing")) reasons.push("Context window is too small");
-  if (model.privacyLevel === null && (step.privacyRequirement === "sensitive" || step.privacyRequirement === "restricted")) reasons.push("Critical privacy evidence is unavailable");
-  else if (model.privacyLevel !== null && PRIVACY_RANK[model.privacyLevel] < PRIVACY_RANK[step.privacyRequirement]) reasons.push("Privacy controls do not meet the requirement");
-  if (step.commercialUseRequired && model.commercialUse === false) reasons.push("Commercial use is not permitted");
+  const privacyRequirement = effectivePrivacyRequirement(step, context);
+  if (model.privacyLevel === null && (privacyRequirement === "sensitive" || privacyRequirement === "restricted")) reasons.push("Critical privacy evidence is unavailable");
+  else if (model.privacyLevel !== null && PRIVACY_RANK[model.privacyLevel] < PRIVACY_RANK[privacyRequirement]) reasons.push("Privacy controls do not meet the requirement");
+  if ((step.commercialUseRequired || context.commercialUse === true) && model.commercialUse === false) reasons.push("Commercial use is not permitted");
   if (model.regions.length > 0 && !model.regions.includes(context.region)) reasons.push("Model is unavailable in the selected region");
   const cost = estimateStepCost(step, model);
   if (!verifiedProduct && cost === null) reasons.push("Critical pricing evidence is unavailable");
@@ -138,6 +159,11 @@ export function getExclusionReasons(step: WorkflowStep, model: CanonicalModel, c
   for (const capability of capabilityGaps(step, [model])) reasons.push(`Missing required capability: ${capability}`);
   const cost = estimateStepCost(step, model);
   if (cost !== null && context.budgetUsd !== null && cost > context.budgetUsd) reasons.push("Estimated step cost exceeds the remaining budget");
+  const subscription = productAccess(model);
+  if (context.budgetUsd !== null && subscription && !modelIsAlreadyOwned(model, context)) {
+    if (subscription.monthlyPriceUsd === undefined) reasons.push("Subscription price is not verified, so budget compatibility cannot be confirmed");
+    else if ((cost ?? 0) + subscription.monthlyPriceUsd > context.budgetUsd) reasons.push("Subscription plus estimated usage exceeds the total budget");
+  }
   return [...new Set(reasons)];
 }
 
@@ -202,12 +228,12 @@ export function scoreCandidate(step: WorkflowStep, model: CanonicalModel, contex
   const limitations: string[] = [];
   if (evidenceCoverage < 1) limitations.push("Some comparison fields are unavailable");
   if (model.privacyLevel === null) limitations.push("Privacy terms were not verified; review the provider agreement before uploading sensitive material");
-  if (step.commercialUseRequired && model.commercialUse === null) limitations.push("Commercial-use terms were not verified; review the provider agreement before publishing");
+  if ((step.commercialUseRequired || context.commercialUse === true) && model.commercialUse === null) limitations.push("Commercial-use terms were not verified; review the provider agreement before publishing");
   if (ageDays > 30) limitations.push(`Task evidence is ${Math.round(ageDays)} days old`);
   const explanation = [
     taskEvidence?.kind === "capability" ? `Official product documentation verifies the capabilities needed for ${taskCategory(step)} work; comparative performance evidence remains limited` : taskEvidence ? `Uses ${taskEvidence.metricName} evidence relevant to ${taskCategory(step)} work` : "Task-specific performance evidence is limited",
     model.existingTool ? "Reuses a subscription you already pay for" : verifiedProduct ? "Subscription cost is counted once across the complete roadmap" : cost < 0.1 ? "Has a low estimated cost for this workload" : "Fits the remaining budget",
-    model.privacyLevel ? `Meets the ${step.privacyRequirement} privacy requirement` : "Privacy evidence is unavailable",
+    model.privacyLevel ? `Meets the ${effectivePrivacyRequirement(step, context)} privacy requirement` : "Privacy evidence is unavailable",
     model.aiRole ?? "AI substantially produces the required output after receiving the user's inputs and instructions",
   ];
   const evidence = (model.evidence ?? []).filter((item) => item === taskEvidence || item.kind !== "benchmark" || item.category === "speed");
@@ -260,7 +286,15 @@ function buildCombination(step: WorkflowStep, models: CanonicalModel[], context:
   const costs = models.map((model) => estimateStepCost(step, model));
   if (costs.some((cost) => cost === null)) return null;
   const totalCost = costs.reduce<number>((sum, cost) => sum + (cost ?? 0), 0);
-  if (context.budgetUsd !== null && totalCost > context.budgetUsd) return null;
+  const subscriptions = new Map<string, number | null>();
+  for (const model of models) {
+    const access = productAccess(model);
+    if (!access || modelIsAlreadyOwned(model, context)) continue;
+    const key = `${model.provider}:${access.productId ?? access.productName ?? model.name}:${access.planName ?? "product"}`.toLowerCase();
+    subscriptions.set(key, access.monthlyPriceUsd ?? null);
+  }
+  if (context.budgetUsd !== null && ([...subscriptions.values()].some((price) => price === null)
+    || totalCost + [...subscriptions.values()].reduce<number>((sum, price) => sum + (price ?? 0), 0) > context.budgetUsd)) return null;
   const toolScores = models.map((model) => scoreCandidate(step, model, { ...context, budgetUsd: null }));
   const contributions = models.map((model) => coverageFor(step, model));
   const roleEvidence = models.map((model, index) => selectCapabilityEvidence(model, contributions[index]));
@@ -327,8 +361,8 @@ function partialCandidates(step: WorkflowStep, models: CanonicalModel[], context
   const required = requiredCapabilitiesForStep(step);
   return models
     .map((model) => ({ model, covered: coverageFor(step, model) }))
-    .filter((item) => item.covered.length > 0 && nonCoverageExclusionReasons(step, item.model, { ...context, budgetUsd: null }, item.covered).length === 0)
-    .map(({ model }) => scoreCandidate(step, model, { ...context, budgetUsd: null }))
+    .filter((item) => item.covered.length > 0 && nonCoverageExclusionReasons(step, item.model, context, item.covered).length === 0)
+    .map(({ model }) => scoreCandidate(step, model, context))
     .filter((candidate) => candidate.coveredCapabilities.length > 0)
     .map((candidate): CandidateScore => ({
       ...candidate,
@@ -378,20 +412,7 @@ function recommendStepData(step: WorkflowStep, models: CanonicalModel[], context
     else singles.push(scoreCandidate(step, model, context));
   }
   singles.sort(compareBestFit);
-  let candidates = singles.length ? singles : findCombinationCandidates(step, models, context);
-  if (!candidates.length && context.budgetUsd !== null) {
-    const withoutBudget = { ...context, budgetUsd: null };
-    const fallbackSingles = models
-      .filter((model) => getExclusionReasons(step, model, withoutBudget).length === 0)
-      .map((model) => scoreCandidate(step, model, withoutBudget))
-      .sort(compareBestFit);
-    candidates = fallbackSingles.length ? fallbackSingles : findCombinationCandidates(step, models, withoutBudget);
-    candidates = candidates.map((candidate) => ({
-      ...candidate,
-      explanation: [...candidate.explanation, "Shown as the closest complete option even though the current budget may need to increase."],
-      limitations: [...new Set([...candidate.limitations, "This fallback may exceed the current budget after subscription costs are included"])],
-    }));
-  }
+  const candidates = singles.length ? singles : findCombinationCandidates(step, models, context);
   const options = optionSet(candidates);
   const partialOptions = candidates.length ? [] : partialCandidates(step, models, context);
   const alternatives = candidates.filter((candidate) => candidate !== options.bestFit).slice(0, 4);
@@ -461,25 +482,28 @@ function chooseGlobalStack(pools: CandidateScore[][], context: RecommendationCon
   const deadlineTime = context.deadline ? new Date(`${context.deadline}T23:59:59Z`).getTime() : Number.POSITIVE_INFINITY;
   const deadlineUrgent = Number.isFinite(deadlineTime) && deadlineTime - context.now <= 7 * 86_400_000;
   for (const pool of pools) {
-    const choices: Array<CandidateScore | null> = pool.length ? pool.slice(0, 8) : [null];
+    const choices: Array<CandidateScore | null> = [...pool.slice(0, 8), null];
     const next: BeamState[] = [];
     for (const state of beam) for (const choice of choices) {
       if (!choice) { next.push({ ...state, choices: [...state.choices, null], utility: state.utility - 60 }); continue; }
       const identities = choice.tools.map(productIdentity);
       const newIdentities = identities.filter((identity) => !state.products.has(identity.key));
+      const hasUnknownNewSubscription = choice.tools.some((tool, index) => {
+        const identity = identities[index];
+        return !state.products.has(identity.key) && !owned(existingTools, tool) && identity.accessMethod === "product" && identity.monthlyPriceUsd === null;
+      });
+      if (context.budgetUsd !== null && hasUnknownNewSubscription) continue;
       const fixedIncrement = choice.tools.reduce((sum, tool, index) => {
         const identity = identities[index];
-        return sum + (!state.products.has(identity.key) && !owned(existingTools, tool) ? identity.monthlyPriceUsd ?? 0 : 0);
+        return sum + (!state.products.has(identity.key) && !owned(existingTools, tool) && identity.accessMethod === "product" ? identity.monthlyPriceUsd ?? 0 : 0);
       }, 0);
       const apiCost = state.apiCost + choice.estimatedCostUsd;
       const fixedCost = state.fixedCost + fixedIncrement;
+      if (context.budgetUsd !== null && apiCost + fixedCost > context.budgetUsd + 0.0001) continue;
       const products = new Set(state.products);
       identities.forEach((identity) => products.add(identity.key));
       const reused = identities.length - newIdentities.length;
-      const previousOverrun = context.budgetUsd === null ? 0 : Math.max(0, state.apiCost + state.fixedCost - context.budgetUsd);
-      const nextOverrun = context.budgetUsd === null ? 0 : Math.max(0, apiCost + fixedCost - context.budgetUsd);
-      const budgetPenalty = nextOverrun - previousOverrun;
-      next.push({ choices: [...state.choices, choice], products, apiCost, fixedCost, utility: state.utility + candidateUtility(choice, variant, reused, newIdentities.length, deadlineUrgent) - budgetPenalty });
+      next.push({ choices: [...state.choices, choice], products, apiCost, fixedCost, utility: state.utility + candidateUtility(choice, variant, reused, newIdentities.length, deadlineUrgent) });
     }
     beam = next.sort((a, b) => b.utility - a.utility || a.apiCost + a.fixedCost - (b.apiCost + b.fixedCost) || a.products.size - b.products.size).slice(0, BEAM_WIDTH);
   }
@@ -503,7 +527,7 @@ function subscriptionSummary(steps: StepRecommendation[], existingTools: string[
       stepNames: [],
       modelNames: [],
       alreadyOwned,
-      additionalCostUsd: alreadyOwned ? 0 : identity.monthlyPriceUsd,
+      additionalCostUsd: alreadyOwned || identity.accessMethod !== "product" ? 0 : identity.monthlyPriceUsd,
       apiUsageEstimateUsd: 0,
     };
     if (!next.stepIds.includes(step.stepId)) next.stepIds.push(step.stepId);
@@ -529,7 +553,10 @@ export function generateStrategyPlan(steps: WorkflowStep[], models: CanonicalMod
   const kept = existingTools.filter((tool) => subscriptions.some((subscription) => `${subscription.productName} ${subscription.planName} ${subscription.modelNames.join(" ")}`.toLowerCase().includes(tool.toLowerCase())));
   const totalCostUsd = Number((fixedCostUsd + apiCostUsd).toFixed(2));
   const overBudgetUsd = context.budgetUsd === null ? 0 : Number(Math.max(0, totalCostUsd - context.budgetUsd).toFixed(2));
-  const hasUnknownSubscriptionPricing = subscriptions.some((subscription) => !subscription.alreadyOwned && subscription.priceUsd === null);
+  const hasUnknownSubscriptionPricing = subscriptions.some((subscription) => subscription.accessMethod === "product" && !subscription.alreadyOwned && subscription.priceUsd === null);
+  const completeStepCount = recommendations.filter((item) => item.step.noAIEligible || (item.selected && item.selected.missingCapabilities.length === 0)).length;
+  const budgetCompatible = context.budgetUsd === null || (!hasUnknownSubscriptionPricing && totalCostUsd <= context.budgetUsd + 0.0001 && completeStepCount === recommendations.length);
+  const budgetRemainingUsd = context.budgetUsd === null ? null : Number(Math.max(0, context.budgetUsd - totalCostUsd).toFixed(2));
   return {
     variant,
     steps: recommendations,
@@ -540,10 +567,26 @@ export function generateStrategyPlan(steps: WorkflowStep[], models: CanonicalMod
     existingSubscriptions: { kept, couldCancel: existingTools.filter((tool) => !kept.includes(tool)) },
     subscriptions,
     uniqueProductCount: subscriptions.length,
-    completeStepCount: recommendations.filter((item) => item.step.noAIEligible || (item.selected && item.selected.missingCapabilities.length === 0)).length,
+    completeStepCount,
     budgetUsd: context.budgetUsd,
     overBudgetUsd,
     hasUnknownSubscriptionPricing,
+    budgetCompatible,
+    budgetRemainingUsd,
+    inputsUsed: {
+      projectDescription: context.projectDescription?.trim() || null,
+      expectedResult: context.expectedResult?.trim() || null,
+      budgetUsd: context.budgetUsd,
+      deadline: context.deadline ?? null,
+      priorityRanking: [...context.priorities],
+      existingTools: [...(context.existingTools ?? [])],
+      informationSensitivity: context.informationSensitivity ?? "standard",
+      commercialUse: context.commercialUse ?? true,
+      providersToAvoid: [...(context.providersToAvoid ?? [])],
+      preferredLanguage: context.preferredLanguage?.trim() || "English",
+      expectedOutputs: context.expectedOutputs?.trim() || null,
+      region: context.region,
+    },
     assumptions: [
       "Usage estimates come from the approved workflow.",
       "Single-tool options are exhausted before combinations are considered.",
@@ -551,6 +594,8 @@ export function generateStrategyPlan(steps: WorkflowStep[], models: CanonicalMod
       "Subscription prices are counted once across the roadmap; API usage remains workload-based.",
       "Existing subscriptions are treated as zero additional subscription cost where the product or plan name matches.",
       "Provider prices exclude taxes and third-party platform fees.",
+      ...(context.budgetUsd !== null ? ["The entered budget is a hard cap across new subscription costs and estimated API usage; unpriced new subscriptions are not selected."] : []),
+      `All saved requirements were applied: ${context.priorities.join(", ")} priority order; ${context.informationSensitivity ?? "standard"} information sensitivity; ${context.commercialUse ?? true ? "commercial" : "non-commercial"} use; ${context.preferredLanguage?.trim() || "English"} output.`,
       ...(hasUnknownSubscriptionPricing ? ["The displayed total is a known-cost subtotal; plans without a verified current price are not included."] : []),
     ],
     dataUpdatedAt: dates.length ? Math.min(...dates) : null,

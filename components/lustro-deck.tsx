@@ -178,7 +178,7 @@ export function LustroDeck() {
                   Modern AI stacks are <em>loud</em>. Teams are tired of decoding options.
                 </h2>
                 <p className="body-lg reveal" style={{ maxWidth: 520 }}>
-                  Teams spend an average of <strong style={{ color: "#fff", fontWeight: 500 }}>6.5 hours per project</strong> piecing together which AI tools and subscription tiers to use. We think that's broken.
+                  Teams spend an average of <strong style={{ color: "#fff", fontWeight: 500 }}>6.5 hours per project</strong> piecing together which AI tools and subscription tiers to use. We think that&apos;s broken.
                 </p>
               </div>
               <div className="s-problem-right">
@@ -342,7 +342,7 @@ export function LustroDeck() {
                 <h2 className="h-display reveal">Tailored for <span className="grd">one-off projects</span> or <span className="grd">monthly workloads</span>.</h2>
               </div>
               <p className="sf-r reveal">
-                Select how you want to structure your AI recommendations based on your team's workflow style and delivery cadence.
+                Select how you want to structure your AI recommendations based on your team&apos;s workflow style and delivery cadence.
               </p>
             </div>
             <div className="feature-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>

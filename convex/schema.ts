@@ -18,6 +18,8 @@ export default defineSchema({
     title: v.string(), originalInput: v.string(), expectedResult: v.string(), deadline: v.optional(v.string()), budget: v.optional(v.number()),
     budgetAmount: v.optional(v.number()), budgetCurrency: v.optional(v.string()), monthlyTasks: v.optional(v.array(v.any())),
     existingTools: v.optional(v.array(v.string())), priorities: v.array(v.string()), estimatedCompletionTime: v.optional(v.string()),
+    informationSensitivity: v.optional(v.string()), commercialUse: v.optional(v.boolean()), providersToAvoid: v.optional(v.array(v.string())),
+    preferredLanguage: v.optional(v.string()), expectedOutputs: v.optional(v.string()),
     status: v.union(v.literal("draft"), v.literal("planned"), v.literal("approved"), v.literal("complete")),
     createdAt: v.number(), updatedAt: v.number(),
   }).index("by_user", ["userId", "updatedAt"]).index("by_team", ["teamId", "updatedAt"]),
